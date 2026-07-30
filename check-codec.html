@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><body>
+<script>
+async function check() {
+  const mp4 = await VideoEncoder.isConfigSupported({ codec: 'avc1.4d401f', width: 1920, height: 1080, bitrate: 1000000, framerate: 60 });
+  const vp9 = await VideoEncoder.isConfigSupported({ codec: 'vp09.00.10.08', width: 1920, height: 1080, bitrate: 1000000, framerate: 60 });
+  const vp8 = await VideoEncoder.isConfigSupported({ codec: 'vp8', width: 1920, height: 1080, bitrate: 1000000, framerate: 60 });
+  document.body.innerHTML = `MP4: ${mp4.supported}, VP9: ${vp9.supported}, VP8: ${vp8.supported}`;
+}
+check();
+</script>
+</body></html>

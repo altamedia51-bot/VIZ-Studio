@@ -83,13 +83,18 @@ export class EncoderEngine {
     const isMp4 = settings.format === 'mp4';
     let muxer: any;
 
+    const width = settings.width % 2 !== 0 ? settings.width - 1 : settings.width;
+    const height = settings.height % 2 !== 0 ? settings.height - 1 : settings.height;
+
+    let encoderError: Error | null = null;
+
     if (isMp4) {
       muxer = new MP4Muxer({
         target: new MP4ArrayBufferTarget(),
         video: {
           codec: 'avc',
-          width: settings.width,
-          height: settings.height,
+          width: width,
+          height: height,
         },
         audio: audioBuffer ? {
           codec: 'aac',
@@ -103,8 +108,8 @@ export class EncoderEngine {
         target: new WebMArrayBufferTarget(),
         video: {
           codec: 'V_VP9',
-          width: settings.width,
-          height: settings.height,
+          width: width,
+          height: height,
           frameRate: settings.fps,
         },
         audio: audioBuffer ? {
@@ -116,34 +121,73 @@ export class EncoderEngine {
     }
 
     let videoCodec = isMp4 ? 'avc1.4d401f' : 'vp09.00.10.08';
+    
+    try {
+      const support = await (window as any).VideoEncoder.isConfigSupported({
+        codec: videoCodec,
+        width: width,
+        height: height,
+        bitrate: settings.bitrateKbps * 1000,
+        framerate: settings.fps,
+      });
+      if (!support.supported) {
+        // Fallback codecs
+        videoCodec = isMp4 ? 'avc1.42001E' : 'vp8';
+        addLog(`Codec not supported, falling back to ${videoCodec}`);
+      }
+    } catch (e) {
+      addLog(`Failed to check codec support, proceeding with ${videoCodec}`);
+    }
 
     const videoEncoder = new (window as any).VideoEncoder({
       output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
-      error: (e: any) => addLog(`VideoEncoder error: ${e.message}`),
+      error: (e: any) => {
+        encoderError = e;
+        addLog(`VideoEncoder error: ${e.message}`);
+      }
     });
 
     videoEncoder.configure({
       codec: videoCodec,
-      width: settings.width,
-      height: settings.height,
+      width: width,
+      height: height,
       bitrate: settings.bitrateKbps * 1000,
       framerate: settings.fps,
     });
 
     let audioEncoder: any = null;
-    let audioFramesEncoded = 0;
 
     if (audioBuffer && (window as any).AudioEncoder) {
-      audioEncoder = new (window as any).AudioEncoder({
-        output: (chunk: any, meta: any) => muxer.addAudioChunk(chunk, meta),
-        error: (e: any) => addLog(`AudioEncoder error: ${e.message}`),
-      });
-      audioEncoder.configure({
-        codec: isMp4 ? 'mp4a.40.2' : 'opus',
-        sampleRate: audioBuffer.sampleRate,
+      const aCodec = isMp4 ? 'mp4a.40.2' : 'opus';
+      
+      // Opus requires 48000Hz. If we use opus and sampleRate isn't 48000, WebCodecs might fail or sound wrong.
+      // Let's coerce sampleRate to 48000 for Opus, or we just rely on the audioBuffer's rate for now and hope it works.
+      const sampleRate = aCodec === 'opus' ? 48000 : audioBuffer.sampleRate;
+      
+      const aConfig = {
+        codec: aCodec,
+        sampleRate: sampleRate,
         numberOfChannels: audioBuffer.numberOfChannels,
         bitrate: 128000,
-      });
+      };
+      
+      try {
+        const aSupport = await (window as any).AudioEncoder.isConfigSupported(aConfig);
+        if (aSupport.supported) {
+          audioEncoder = new (window as any).AudioEncoder({
+            output: (chunk: any, meta: any) => muxer.addAudioChunk(chunk, meta),
+            error: (e: any) => {
+              encoderError = e;
+              addLog(`AudioEncoder error: ${e.message}`);
+            },
+          });
+          audioEncoder.configure(aConfig);
+        } else {
+          addLog(`AudioEncoder config not supported for ${aCodec}`);
+        }
+      } catch (e) {
+        addLog(`AudioEncoder error during configure: ${e}`);
+      }
     }
 
     addLog(`Mulai rendering video dengan codec ${videoCodec}...`);
@@ -151,17 +195,25 @@ export class EncoderEngine {
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       if (this.isCancelled) {
-        videoEncoder.close();
-        if (audioEncoder) audioEncoder.close();
+        if (videoEncoder.state !== 'closed') videoEncoder.close();
+        if (audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close();
         throw new Error('Export cancelled by user');
+      }
+
+      if (encoderError || videoEncoder.state === 'closed') {
+        throw encoderError || new Error('VideoEncoder closed unexpectedly');
       }
 
       while (this.isPaused) {
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      while (videoEncoder.encodeQueueSize > 8) {
+      while (videoEncoder.state !== 'closed' && videoEncoder.encodeQueueSize > 8) {
         await new Promise((r) => setTimeout(r, 10));
+      }
+
+      if (encoderError || videoEncoder.state === 'closed') {
+        throw encoderError || new Error('VideoEncoder closed unexpectedly');
       }
 
       const currentTime = frameIndex * frameIntervalSec;
@@ -173,7 +225,13 @@ export class EncoderEngine {
       });
 
       const keyFrame = frameIndex % (settings.fps * 2) === 0;
-      videoEncoder.encode(videoFrame, { keyFrame });
+      if (videoEncoder.state !== 'closed') {
+        videoEncoder.encode(videoFrame, { keyFrame });
+      } else {
+        videoFrame.close();
+        bitmap.close();
+        throw encoderError || new Error('VideoEncoder closed unexpectedly');
+      }
       videoFrame.close();
       bitmap.close();
 
