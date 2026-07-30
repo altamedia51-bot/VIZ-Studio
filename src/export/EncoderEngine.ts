@@ -1,50 +1,11 @@
-/**
- * VIZ Studio - Dynamic Video & Media Export Engine
- * Checks VideoEncoder.isConfigSupported() and auto-selects codec chain:
- * AV1 -> H264 Baseline -> VP9 -> VP8 -> MediaRecorder Fallback -> GIF / PNG Sequence
- */
-
 import JSZip from 'jszip';
 import { ExportSettings, ExportProgress } from '../types';
+import { Muxer as WebMMuxer, ArrayBufferTarget as WebMArrayBufferTarget } from 'webm-muxer';
+import { Muxer as MP4Muxer, ArrayBufferTarget as MP4ArrayBufferTarget } from 'mp4-muxer';
 
 export class EncoderEngine {
   private isCancelled: boolean = false;
   private isPaused: boolean = false;
-
-  public async getBestSupportedCodec(width: number, height: number, fps: number, bitrateKbps: number): Promise<string | null> {
-    if (typeof (window as any).VideoEncoder === 'undefined') {
-      return null;
-    }
-
-    const candidateConfigs = [
-      { codec: 'av01.0.04M.08', label: 'AV1' },
-      { codec: 'avc1.42E01E', label: 'H264 Baseline' },
-      { codec: 'avc1.4d401f', label: 'H264 Main' },
-      { codec: 'vp09.00.10.08', label: 'VP9' },
-      { codec: 'vp8', label: 'VP8' },
-    ];
-
-    for (const item of candidateConfigs) {
-      try {
-        const support = await (window as any).VideoEncoder.isConfigSupported({
-          codec: item.codec,
-          width,
-          height,
-          bitrate: bitrateKbps * 1000,
-          framerate: fps,
-        });
-
-        if (support && support.supported) {
-          console.log(`[VIZ Studio Encoder] Codec supported: ${item.label} (${item.codec})`);
-          return item.codec;
-        }
-      } catch (e) {
-        console.warn(`[VIZ Studio Encoder] Codec test failed for ${item.label}:`, e);
-      }
-    }
-
-    return null;
-  }
 
   public cancelExport() {
     this.isCancelled = true;
@@ -64,9 +25,7 @@ export class EncoderEngine {
     durationSec: number,
     settings: ExportSettings,
     onProgress: (progress: ExportProgress) => void,
-    audioStream?: MediaStream | null,
-    playAudio?: () => void,
-    stopAudio?: () => void
+    audioBuffer?: AudioBuffer | null
   ): Promise<Blob> {
     this.isCancelled = false;
     this.isPaused = false;
@@ -82,95 +41,118 @@ export class EncoderEngine {
 
     addLog(`Initiating export: ${settings.format.toUpperCase()} ${settings.width}x${settings.height} @ ${settings.fps} FPS`);
 
-    // Handle PNG Sequence Export
     if (settings.format === 'png_sequence') {
       return this.exportPNGSequence(canvas, renderFrameAtTime, totalFrames, frameIntervalSec, onProgress, addLog, logs);
     }
 
-    // MediaRecorder Primary Strategy (Fast, containerized MP4/WebM, highly reliable across all browsers)
+    if (typeof (window as any).VideoEncoder === 'undefined') {
+      throw new Error('Browser Anda tidak mendukung WebCodecs VideoEncoder.');
+    }
+
     try {
-      return await this.exportWithMediaRecorder(
+      return await this.exportWithMuxer(
         canvas,
         renderFrameAtTime,
         totalFrames,
         frameIntervalSec,
+        durationSec,
         settings,
         onProgress,
         addLog,
         logs,
-        audioStream,
-        playAudio,
-        stopAudio
+        audioBuffer
       );
     } catch (err: any) {
-      addLog(`MediaRecorder failed (${err.message}). Trying WebCodecs fallback...`);
+      addLog(`Export failed: ${err.message}`);
+      throw new Error(`Gagal mengekspor video: ${err.message}`);
     }
-
-    // WebCodecs Fallback Strategy
-    const bestCodec = await this.getBestSupportedCodec(settings.width, settings.height, settings.fps, settings.bitrateKbps);
-    if (bestCodec) {
-      try {
-        addLog(`Selected WebCodecs hardware codec: ${bestCodec}`);
-        return await this.exportWithWebCodecs(
-          canvas,
-          renderFrameAtTime,
-          totalFrames,
-          frameIntervalSec,
-          settings,
-          bestCodec,
-          onProgress,
-          addLog,
-          logs
-        );
-      } catch (err: any) {
-        addLog(`WebCodecs failed: ${err.message}`);
-      }
-    }
-
-    throw new Error(
-      'Browser Anda belum mendukung konfigurasi ekspor ini. Silakan coba pilih format atau kualitas lain.'
-    );
   }
 
-  // -------------------------------------------------------------------------
-  // WebCodecs Export Strategy
-  // -------------------------------------------------------------------------
-  private async exportWithWebCodecs(
+  private async exportWithMuxer(
     canvas: HTMLCanvasElement,
     renderFrameAtTime: (t: number) => void,
     totalFrames: number,
     frameIntervalSec: number,
+    durationSec: number,
     settings: ExportSettings,
-    codec: string,
     onProgress: (p: ExportProgress) => void,
     addLog: (m: string) => void,
-    logs: string[]
+    logs: string[],
+    audioBuffer?: AudioBuffer | null
   ): Promise<Blob> {
-    const chunks: Uint8Array[] = [];
-    const startTime = Date.now();
+    const isMp4 = settings.format === 'mp4';
+    let muxer: any;
+
+    if (isMp4) {
+      muxer = new MP4Muxer({
+        target: new MP4ArrayBufferTarget(),
+        video: {
+          codec: 'avc',
+          width: settings.width,
+          height: settings.height,
+        },
+        audio: audioBuffer ? {
+          codec: 'aac',
+          sampleRate: audioBuffer.sampleRate,
+          numberOfChannels: audioBuffer.numberOfChannels
+        } : undefined,
+        fastStart: 'in-memory',
+      });
+    } else {
+      muxer = new WebMMuxer({
+        target: new WebMArrayBufferTarget(),
+        video: {
+          codec: 'V_VP9',
+          width: settings.width,
+          height: settings.height,
+          frameRate: settings.fps,
+        },
+        audio: audioBuffer ? {
+          codec: 'A_OPUS',
+          sampleRate: audioBuffer.sampleRate,
+          numberOfChannels: audioBuffer.numberOfChannels
+        } : undefined
+      });
+    }
+
+    let videoCodec = isMp4 ? 'avc1.4d401f' : 'vp09.00.10.08';
 
     const videoEncoder = new (window as any).VideoEncoder({
-      output: (chunk: any) => {
-        const buffer = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(buffer);
-        chunks.push(buffer);
-      },
-      error: (e: any) => {
-        addLog(`VideoEncoder error: ${e.message}`);
-      },
+      output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
+      error: (e: any) => addLog(`VideoEncoder error: ${e.message}`),
     });
 
     videoEncoder.configure({
-      codec,
+      codec: videoCodec,
       width: settings.width,
       height: settings.height,
       bitrate: settings.bitrateKbps * 1000,
       framerate: settings.fps,
     });
 
+    let audioEncoder: any = null;
+    let audioFramesEncoded = 0;
+
+    if (audioBuffer && (window as any).AudioEncoder) {
+      audioEncoder = new (window as any).AudioEncoder({
+        output: (chunk: any, meta: any) => muxer.addAudioChunk(chunk, meta),
+        error: (e: any) => addLog(`AudioEncoder error: ${e.message}`),
+      });
+      audioEncoder.configure({
+        codec: isMp4 ? 'mp4a.40.2' : 'opus',
+        sampleRate: audioBuffer.sampleRate,
+        numberOfChannels: audioBuffer.numberOfChannels,
+        bitrate: 128000,
+      });
+    }
+
+    addLog(`Mulai rendering video dengan codec ${videoCodec}...`);
+    const startTime = Date.now();
+
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       if (this.isCancelled) {
         videoEncoder.close();
+        if (audioEncoder) audioEncoder.close();
         throw new Error('Export cancelled by user');
       }
 
@@ -178,7 +160,6 @@ export class EncoderEngine {
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Queue backpressure check to prevent VideoEncoder hanging/stalling
       while (videoEncoder.encodeQueueSize > 8) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -207,7 +188,7 @@ export class EncoderEngine {
         progressPercent,
         elapsedSeconds: Math.round(elapsedSeconds),
         estimatedSecondsLeft,
-        activeCodec: codec,
+        activeCodec: `Video (${isMp4 ? 'MP4' : 'WebM'})`,
         logs,
       });
 
@@ -216,174 +197,71 @@ export class EncoderEngine {
       }
     }
 
-    onProgress({
-      status: 'rendering',
-      currentFrame: totalFrames,
-      totalFrames,
-      progressPercent: 100,
-      elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
-      estimatedSecondsLeft: 0,
-      activeCodec: 'Menyusun & mengemas file video...',
-      logs,
-    });
-
     await videoEncoder.flush();
     videoEncoder.close();
 
-    const finalBlob = new Blob(chunks, { type: settings.format === 'mp4' ? 'video/mp4' : 'video/webm' });
-    addLog(`Export successful! Total size: ${(finalBlob.size / (1024 * 1024)).toFixed(2)} MB`);
+    if (audioEncoder && audioBuffer) {
+      addLog(`Menyusun trek audio...`);
+      const sampleRate = audioBuffer.sampleRate;
+      const numChannels = audioBuffer.numberOfChannels;
+      
+      // Calculate how many samples are needed for the exported duration
+      const totalSamplesToEncode = Math.ceil(durationSec * sampleRate);
+
+      // Copy channel data
+      const channelData: Float32Array[] = [];
+      for (let i = 0; i < numChannels; i++) {
+        channelData.push(audioBuffer.getChannelData(i));
+      }
+
+      // Encode audio in chunks of 0.5s
+      const chunkSize = Math.floor(sampleRate * 0.5); 
+      for (let offset = 0; offset < totalSamplesToEncode; offset += chunkSize) {
+        if (this.isCancelled) throw new Error('Export cancelled');
+        
+        while (audioEncoder.encodeQueueSize > 10) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
+
+        const size = Math.min(chunkSize, totalSamplesToEncode - offset);
+        const planarData = new Float32Array(size * numChannels);
+        
+        for (let c = 0; c < numChannels; c++) {
+          const channelDestOffset = c * size;
+          // If we read past the audio buffer length, pad with 0s (silence)
+          if (offset >= audioBuffer.length) {
+            // Already 0s due to Float32Array init
+          } else {
+            const copySize = Math.min(size, audioBuffer.length - offset);
+            planarData.set(channelData[c].subarray(offset, offset + copySize), channelDestOffset);
+          }
+        }
+
+        const audioData = new (window as any).AudioData({
+          format: 'f32-planar',
+          sampleRate: sampleRate,
+          numberOfFrames: size,
+          numberOfChannels: numChannels,
+          timestamp: Math.round((offset / sampleRate) * 1000000), // microsec
+          data: planarData,
+        });
+
+        audioEncoder.encode(audioData);
+        audioData.close();
+      }
+
+      await audioEncoder.flush();
+      audioEncoder.close();
+    }
+
+    muxer.finalize();
+    const buffer = muxer.target.buffer;
+    const finalBlob = new Blob([buffer], { type: isMp4 ? 'video/mp4' : 'video/webm' });
+    
+    addLog(`Export berhasil! Ukuran: ${(finalBlob.size / (1024 * 1024)).toFixed(2)} MB`);
     return finalBlob;
   }
 
-  // -------------------------------------------------------------------------
-  // MediaRecorder Fallback Strategy
-  // -------------------------------------------------------------------------
-  private async exportWithMediaRecorder(
-    canvas: HTMLCanvasElement,
-    renderFrameAtTime: (t: number) => void,
-    totalFrames: number,
-    frameIntervalSec: number,
-    settings: ExportSettings,
-    onProgress: (p: ExportProgress) => void,
-    addLog: (m: string) => void,
-    logs: string[],
-    audioStream?: MediaStream | null,
-    playAudio?: () => void,
-    stopAudio?: () => void
-  ): Promise<Blob> {
-    let candidateMimes: string[] = [];
-    if (settings.format === 'mp4') {
-      candidateMimes = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
-    } else {
-      candidateMimes = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
-    }
-
-    const selectedMime = candidateMimes.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
-    addLog(`MediaRecorder using mime: ${selectedMime}`);
-
-    let stream: MediaStream;
-    let isRealtime = false;
-
-    if (audioStream) {
-      addLog(`Audio stream detected, switching to REAL-TIME rendering mode to capture audio...`);
-      isRealtime = true;
-      stream = canvas.captureStream ? canvas.captureStream(settings.fps) : (canvas as any).mozCaptureStream(settings.fps);
-      
-      // Add audio tracks to the video stream
-      audioStream.getAudioTracks().forEach(track => {
-        stream.addTrack(track);
-      });
-    } else {
-      stream = canvas.captureStream ? canvas.captureStream(0) : (canvas as any).mozCaptureStream(0);
-    }
-
-    const videoTrack = stream.getVideoTracks()[0];
-
-    const recorder = new MediaRecorder(stream, {
-      mimeType: selectedMime,
-      videoBitsPerSecond: settings.bitrateKbps * 1000,
-    });
-
-    const recordedChunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        recordedChunks.push(e.data);
-      }
-    };
-
-    recorder.start(200); // chunk every 200ms
-    const startTime = Date.now();
-
-    if (isRealtime && playAudio) {
-      playAudio();
-    }
-
-    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
-      if (this.isCancelled) {
-        if (isRealtime && stopAudio) stopAudio();
-        recorder.stop();
-        throw new Error('Export dibatalkan oleh pengguna');
-      }
-
-      while (this.isPaused) {
-        if (isRealtime && stopAudio) stopAudio();
-        await new Promise((r) => setTimeout(r, 200));
-      }
-
-      const currentTime = frameIndex * frameIntervalSec;
-      renderFrameAtTime(currentTime);
-
-      if (!isRealtime && videoTrack && (videoTrack as any).requestFrame) {
-        (videoTrack as any).requestFrame();
-      }
-
-      const elapsedSeconds = (Date.now() - startTime) / 1000;
-      const progressPercent = Math.min(99, Math.round(((frameIndex + 1) / totalFrames) * 100));
-      const estimatedSecondsLeft = Math.max(0, Math.round((elapsedSeconds / (frameIndex + 1)) * (totalFrames - frameIndex - 1)));
-
-      onProgress({
-        status: 'rendering',
-        currentFrame: frameIndex + 1,
-        totalFrames,
-        progressPercent,
-        elapsedSeconds: Math.round(elapsedSeconds),
-        estimatedSecondsLeft,
-        activeCodec: `MediaRecorder (${isRealtime ? 'Real-Time' : 'Offline'})`,
-        logs,
-      });
-
-      if (isRealtime) {
-        const targetTime = startTime + currentTime * 1000;
-        const now = Date.now();
-        const waitTime = targetTime - now;
-        if (waitTime > 0) {
-          await new Promise((r) => setTimeout(r, waitTime));
-        } else {
-          await new Promise((r) => setTimeout(r, 0));
-        }
-      } else {
-        if (frameIndex % 3 === 0) {
-          await new Promise((r) => setTimeout(r, 1));
-        }
-      }
-    }
-
-    if (isRealtime && stopAudio) {
-      stopAudio();
-    }
-
-    onProgress({
-      status: 'rendering',
-      currentFrame: totalFrames,
-      totalFrames,
-      progressPercent: 100,
-      elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
-      estimatedSecondsLeft: 0,
-      activeCodec: 'Menyusun & mengemas file video...',
-      logs,
-    });
-
-    addLog('Menghentikan rekaman & menyusun file hasil render...');
-
-    return new Promise((resolve, reject) => {
-      recorder.onstop = () => {
-        const mimeBase = selectedMime.split(';')[0] || 'video/webm';
-        const blob = new Blob(recordedChunks, { type: mimeBase });
-        addLog(`MediaRecorder finished! Size: ${(blob.size / (1024 * 1024)).toFixed(2)} MB`);
-        resolve(blob);
-      };
-
-      recorder.onerror = (e: any) => {
-        reject(e?.error || new Error('MediaRecorder recording error'));
-      };
-
-      recorder.stop();
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // PNG Sequence Zip Export Strategy
-  // -------------------------------------------------------------------------
   private async exportPNGSequence(
     canvas: HTMLCanvasElement,
     renderFrameAtTime: (t: number) => void,

@@ -59,6 +59,10 @@ export class AudioEngine {
     return this.ctx;
   }
 
+  public getAudioBuffer(): AudioBuffer | null {
+    return this.buffer;
+  }
+
   public getAudioStream(): MediaStream | null {
     return this.mediaStreamDestination ? this.mediaStreamDestination.stream : null;
   }

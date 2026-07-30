@@ -64,12 +64,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     });
 
     try {
-      const audioStream = globalAudioEngine.getAudioStream();
-      const playAudio = () => {
-        globalAudioEngine.seek(0);
-        globalAudioEngine.play(0, false);
-      };
-      const stopAudio = () => globalAudioEngine.stop();
+      const audioBuffer = globalAudioEngine.getAudioBuffer();
 
       const blob = await encoderEngine.startExport(
         canvas,
@@ -77,9 +72,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         duration,
         settings,
         (p) => setProgress({ ...p }),
-        audioStream,
-        playAudio,
-        stopAudio
+        audioBuffer
       );
 
       setProgress((prev) => ({
