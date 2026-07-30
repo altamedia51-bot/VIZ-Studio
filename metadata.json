@@ -1,0 +1,6 @@
+{
+  "name": "VIZ Studio",
+  "description": "Professional browser-based audio visualizer, motion graphics, and video editor studio with 50+ audio visualizer presets, advanced text animations, timeline editing, custom backgrounds, and high-performance export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
