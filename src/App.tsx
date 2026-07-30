@@ -315,6 +315,7 @@ export default function App() {
           audioBands={audioBands}
           onTogglePlay={togglePlay}
           onSeek={seek}
+          onUpdateLayer={updateLayer}
         />
 
         {/* Right Contextual Inspector */}

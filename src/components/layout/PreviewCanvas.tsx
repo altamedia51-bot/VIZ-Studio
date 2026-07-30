@@ -18,6 +18,7 @@ interface PreviewCanvasProps {
   audioBands: AudioBands;
   onTogglePlay: () => void;
   onSeek: (timeSec: number) => void;
+  onUpdateLayer?: (id: string, updates: Partial<any>) => void;
 }
 
 const bgRenderer = new BackgroundRenderer();
@@ -31,10 +32,14 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   audioBands,
   onTogglePlay,
   onSeek,
+  onUpdateLayer,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const [draggingLayerId, setDraggingLayerId] = React.useState<string | null>(null);
+  const [dragOffset, setDragOffset] = React.useState<{ x: number; y: number } | null>(null);
 
   const { width: renderWidth, height: renderHeight } = project.resolution;
 
@@ -171,6 +176,74 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(ms).padStart(2, '0')}`;
   };
 
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onUpdateLayer) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = renderWidth / rect.width;
+    const scaleY = renderHeight / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+
+    // Check hit from top-most layer
+    const sortedLayers = [...project.layers].sort((a, b) => b.zIndex - a.zIndex);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    for (const layer of sortedLayers) {
+      if (!layer.visible || layer.type !== 'text' || layer.locked) continue;
+      const textLayer = layer as TextLayer;
+
+      const centerX = renderWidth / 2 + textLayer.x;
+      const centerY = renderHeight / 2 + textLayer.y;
+
+      ctx.save();
+      ctx.font = `${textLayer.fontStyle} ${textLayer.fontWeight} ${textLayer.fontSize}px "${textLayer.fontFamily}", sans-serif`;
+      const metrics = ctx.measureText(textLayer.content);
+      ctx.restore();
+
+      const textWidth = metrics.width;
+      const textHeight = textLayer.fontSize; // Rough bounding box
+
+      const dx = mouseX - centerX;
+      const dy = mouseY - centerY;
+
+      if (
+        Math.abs(dx) <= (textWidth / 2) * (textLayer.scale || 1) &&
+        Math.abs(dy) <= (textHeight / 2) * (textLayer.scale || 1)
+      ) {
+        setDraggingLayerId(textLayer.id);
+        setDragOffset({ x: mouseX - textLayer.x, y: mouseY - textLayer.y });
+        return; // Stop at topmost clicked layer
+      }
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!draggingLayerId || !dragOffset || !onUpdateLayer) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = renderWidth / rect.width;
+    const scaleY = renderHeight / rect.height;
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+
+    const newX = mouseX - dragOffset.x;
+    const newY = mouseY - dragOffset.y;
+
+    onUpdateLayer(draggingLayerId, { x: newX, y: newY });
+  };
+
+  const handleMouseUp = () => {
+    setDraggingLayerId(null);
+    setDragOffset(null);
+  };
+
   return (
     <div className="flex-1 bg-[#050505] flex flex-col justify-between overflow-hidden relative select-none">
       {/* Canvas Viewport Centered */}
@@ -180,7 +253,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             ref={canvasRef}
             width={renderWidth}
             height={renderHeight}
-            className="w-full h-full object-contain block bg-black"
+            className={`w-full h-full object-contain block bg-black ${draggingLayerId ? 'cursor-grabbing' : 'cursor-grab'}`}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
           />
         </div>
       </div>
