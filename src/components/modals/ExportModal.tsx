@@ -7,6 +7,7 @@ import { Download, X, Pause, Play, AlertCircle, CheckCircle2, Loader2, Film, Fil
 import { ExportSettings, ExportProgress, ExportFormat, ExportQuality, ResolutionPreset } from '../../types';
 import { RESOLUTION_PRESETS } from '../../hooks/useProject';
 import { EncoderEngine } from '../../export/EncoderEngine';
+import { globalAudioEngine } from '../../audio/AudioEngine';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -63,12 +64,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     });
 
     try {
+      const audioStream = globalAudioEngine.getAudioStream();
+      const playAudio = () => {
+        globalAudioEngine.seek(0);
+        globalAudioEngine.play(0, false);
+      };
+      const stopAudio = () => globalAudioEngine.stop();
+
       const blob = await encoderEngine.startExport(
         canvas,
         renderFrameAtTime,
         duration,
         settings,
-        (p) => setProgress({ ...p })
+        (p) => setProgress({ ...p }),
+        audioStream,
+        playAudio,
+        stopAudio
       );
 
       setProgress((prev) => ({
@@ -90,7 +101,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const url = URL.createObjectURL(progress.outputBlob);
     const a = document.createElement('a');
     a.href = url;
-    const ext = settings.format === 'png_sequence' ? 'zip' : settings.format;
+    
+    let ext = settings.format === 'png_sequence' ? 'zip' : settings.format;
+    if (progress.outputBlob.type.includes('webm')) {
+      ext = 'webm';
+    } else if (progress.outputBlob.type.includes('mp4')) {
+      ext = 'mp4';
+    }
+    
     a.download = `viz_studio_export_${Date.now()}.${ext}`;
     document.body.appendChild(a);
     a.click();

@@ -63,7 +63,10 @@ export class EncoderEngine {
     renderFrameAtTime: (timeSec: number) => void,
     durationSec: number,
     settings: ExportSettings,
-    onProgress: (progress: ExportProgress) => void
+    onProgress: (progress: ExportProgress) => void,
+    audioStream?: MediaStream | null,
+    playAudio?: () => void,
+    stopAudio?: () => void
   ): Promise<Blob> {
     this.isCancelled = false;
     this.isPaused = false;
@@ -94,7 +97,10 @@ export class EncoderEngine {
         settings,
         onProgress,
         addLog,
-        logs
+        logs,
+        audioStream,
+        playAudio,
+        stopAudio
       );
     } catch (err: any) {
       addLog(`MediaRecorder failed (${err.message}). Trying WebCodecs fallback...`);
@@ -240,7 +246,10 @@ export class EncoderEngine {
     settings: ExportSettings,
     onProgress: (p: ExportProgress) => void,
     addLog: (m: string) => void,
-    logs: string[]
+    logs: string[],
+    audioStream?: MediaStream | null,
+    playAudio?: () => void,
+    stopAudio?: () => void
   ): Promise<Blob> {
     let candidateMimes: string[] = [];
     if (settings.format === 'mp4') {
@@ -252,8 +261,22 @@ export class EncoderEngine {
     const selectedMime = candidateMimes.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
     addLog(`MediaRecorder using mime: ${selectedMime}`);
 
-    // Capture stream from canvas. captureStream(0) allows manual frame triggers
-    const stream = canvas.captureStream ? canvas.captureStream(0) : (canvas as any).mozCaptureStream(0);
+    let stream: MediaStream;
+    let isRealtime = false;
+
+    if (audioStream) {
+      addLog(`Audio stream detected, switching to REAL-TIME rendering mode to capture audio...`);
+      isRealtime = true;
+      stream = canvas.captureStream ? canvas.captureStream(settings.fps) : (canvas as any).mozCaptureStream(settings.fps);
+      
+      // Add audio tracks to the video stream
+      audioStream.getAudioTracks().forEach(track => {
+        stream.addTrack(track);
+      });
+    } else {
+      stream = canvas.captureStream ? canvas.captureStream(0) : (canvas as any).mozCaptureStream(0);
+    }
+
     const videoTrack = stream.getVideoTracks()[0];
 
     const recorder = new MediaRecorder(stream, {
@@ -271,20 +294,26 @@ export class EncoderEngine {
     recorder.start(200); // chunk every 200ms
     const startTime = Date.now();
 
+    if (isRealtime && playAudio) {
+      playAudio();
+    }
+
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       if (this.isCancelled) {
+        if (isRealtime && stopAudio) stopAudio();
         recorder.stop();
         throw new Error('Export dibatalkan oleh pengguna');
       }
 
       while (this.isPaused) {
+        if (isRealtime && stopAudio) stopAudio();
         await new Promise((r) => setTimeout(r, 200));
       }
 
       const currentTime = frameIndex * frameIntervalSec;
       renderFrameAtTime(currentTime);
 
-      if (videoTrack && (videoTrack as any).requestFrame) {
+      if (!isRealtime && videoTrack && (videoTrack as any).requestFrame) {
         (videoTrack as any).requestFrame();
       }
 
@@ -299,14 +328,28 @@ export class EncoderEngine {
         progressPercent,
         elapsedSeconds: Math.round(elapsedSeconds),
         estimatedSecondsLeft,
-        activeCodec: `MediaRecorder (${selectedMime})`,
+        activeCodec: `MediaRecorder (${isRealtime ? 'Real-Time' : 'Offline'})`,
         logs,
       });
 
-      // Rapid yield to event loop
-      if (frameIndex % 3 === 0) {
-        await new Promise((r) => setTimeout(r, 1));
+      if (isRealtime) {
+        const targetTime = startTime + currentTime * 1000;
+        const now = Date.now();
+        const waitTime = targetTime - now;
+        if (waitTime > 0) {
+          await new Promise((r) => setTimeout(r, waitTime));
+        } else {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      } else {
+        if (frameIndex % 3 === 0) {
+          await new Promise((r) => setTimeout(r, 1));
+        }
       }
+    }
+
+    if (isRealtime && stopAudio) {
+      stopAudio();
     }
 
     onProgress({

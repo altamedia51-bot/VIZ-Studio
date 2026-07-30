@@ -34,10 +34,19 @@ export class IndexedDBStorage {
 
   public async saveProject(project: ProjectData): Promise<void> {
     const db = await this.dbPromise;
+    const serializableProject = JSON.parse(
+      JSON.stringify(project, (key, value) => {
+        if (key === 'videoElement') return undefined;
+        if (typeof value === 'object' && value !== null && (value instanceof HTMLElement || value.nodeType)) {
+          return undefined;
+        }
+        return value;
+      })
+    );
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_PROJECTS, 'readwrite');
       const store = tx.objectStore(STORE_PROJECTS);
-      const req = store.put(project);
+      const req = store.put(serializableProject);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });

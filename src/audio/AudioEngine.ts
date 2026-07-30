@@ -29,6 +29,8 @@ export class AudioEngine {
   // Listeners
   private onEndedCallback?: () => void;
 
+  private mediaStreamDestination: MediaStreamAudioDestinationNode | null = null;
+
   constructor() {
     // Lazy AudioContext initialization
   }
@@ -45,6 +47,9 @@ export class AudioEngine {
       this.gainNode.connect(this.ctx.destination);
       this.analyserNode.connect(this.gainNode);
 
+      this.mediaStreamDestination = this.ctx.createMediaStreamDestination();
+      this.gainNode.connect(this.mediaStreamDestination);
+
       this.frequencyData = new Uint8Array(this.analyserNode.frequencyBinCount);
       this.timeDomainData = new Uint8Array(this.analyserNode.frequencyBinCount);
     }
@@ -52,6 +57,10 @@ export class AudioEngine {
       this.ctx.resume();
     }
     return this.ctx;
+  }
+
+  public getAudioStream(): MediaStream | null {
+    return this.mediaStreamDestination ? this.mediaStreamDestination.stream : null;
   }
 
   public async loadAudioFile(file: File): Promise<AudioBuffer> {

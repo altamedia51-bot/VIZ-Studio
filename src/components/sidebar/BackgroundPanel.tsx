@@ -43,12 +43,7 @@ export const BackgroundPanel: React.FC<BackgroundPanelProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       const url = URL.createObjectURL(file);
-      const videoEl = document.createElement('video');
-      videoEl.src = url;
-      videoEl.loop = true;
-      videoEl.muted = true;
-      videoEl.play();
-      onUpdateBgLayer({ bgType: 'video', videoUrl: url, videoElement: videoEl });
+      onUpdateBgLayer({ bgType: 'video', videoUrl: url });
     }
   };
 
