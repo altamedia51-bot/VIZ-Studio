@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><body>
+<script>
+async function check() {
+  const r1 = await VideoEncoder.isConfigSupported({ codec: 'avc1.4d402a', width: 1920, height: 1080, bitrate: 1000000, framerate: 60 });
+  const r2 = await VideoEncoder.isConfigSupported({ codec: 'avc1.64002a', width: 1920, height: 1080, bitrate: 1000000, framerate: 60 });
+  const r3 = await VideoEncoder.isConfigSupported({ codec: 'avc1.4d4028', width: 1920, height: 1080, bitrate: 1000000, framerate: 30 });
+  document.body.innerHTML = `4d402a: ${r1.supported}, 64002a: ${r2.supported}, 4d4028: ${r3.supported}`;
+}
+check();
+</script>
+</body></html>

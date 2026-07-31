@@ -120,7 +120,7 @@ export class EncoderEngine {
       });
     }
 
-    let videoCodec = isMp4 ? 'avc1.4d401f' : 'vp09.00.10.08';
+    let videoCodec = isMp4 ? 'avc1.4d402a' : 'vp09.00.10.08'; // Main Profile, Level 4.2
     
     try {
       const support = await (window as any).VideoEncoder.isConfigSupported({
@@ -132,7 +132,7 @@ export class EncoderEngine {
       });
       if (!support.supported) {
         // Fallback codecs
-        videoCodec = isMp4 ? 'avc1.42001E' : 'vp8';
+        videoCodec = isMp4 ? 'avc1.64002a' : 'vp8'; // High Profile, Level 4.2
         addLog(`Codec not supported, falling back to ${videoCodec}`);
       }
     } catch (e) {
@@ -160,9 +160,7 @@ export class EncoderEngine {
     if (audioBuffer && (window as any).AudioEncoder) {
       const aCodec = isMp4 ? 'mp4a.40.2' : 'opus';
       
-      // Opus requires 48000Hz. If we use opus and sampleRate isn't 48000, WebCodecs might fail or sound wrong.
-      // Let's coerce sampleRate to 48000 for Opus, or we just rely on the audioBuffer's rate for now and hope it works.
-      const sampleRate = aCodec === 'opus' ? 48000 : audioBuffer.sampleRate;
+      const sampleRate = audioBuffer.sampleRate;
       
       const aConfig = {
         codec: aCodec,
