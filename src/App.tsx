@@ -345,7 +345,7 @@ export default function App() {
         onClose={() => setIsExportOpen(false)}
         canvas={document.querySelector('canvas')}
         duration={duration || project.duration}
-        renderFrameAtTime={(t) => previewCanvasRef.current?.renderFrameSync(t)}
+        renderFrameAtTime={(t) => previewCanvasRef.current?.renderFrameAsync(t)}
       />
 
       <ProjectModal

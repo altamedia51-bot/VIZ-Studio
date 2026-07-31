@@ -390,7 +390,8 @@ export function renderWave({ ctx, width, height, timeDomainData, layer, time }: 
 // ---------------------------------------------------------------------------
 const particlesCache: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
 
-export function renderParticle({ ctx, width, height, audioBands, layer }: RenderContext) {
+let lastParticleTime = 0;
+export function renderParticle({ ctx, width, height, audioBands, layer, time }: RenderContext) {
   const centerX = width / 2 + (layer.x || 0);
   const centerY = height / 2 + (layer.y || 0);
 
@@ -410,12 +411,16 @@ export function renderParticle({ ctx, width, height, audioBands, layer }: Render
     }
   }
 
+  let dt = time - lastParticleTime;
+  if (dt < 0 || dt > 0.1) dt = 1/60;
+  lastParticleTime = time;
+
   ctx.save();
   for (let i = particlesCache.length - 1; i >= 0; i--) {
     const p = particlesCache[i];
-    p.x += p.vx;
-    p.y += p.vy;
-    p.life -= 0.02;
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    p.life -= 0.02 * dt * 60;
 
     if (p.life <= 0) {
       particlesCache.splice(i, 1);
@@ -492,7 +497,8 @@ export function renderFire({ ctx, width, height, frequencyData, layer }: RenderC
 // ---------------------------------------------------------------------------
 const rainRipples: { x: number; y: number; r: number; alpha: number }[] = [];
 
-export function renderRain({ ctx, width, height, audioBands, layer }: RenderContext) {
+let globalLastRainTime = 0;
+export function renderRain({ ctx, width, height, audioBands, layer, time }: RenderContext) {
   if (audioBands.bass > 0.4 && rainRipples.length < 30) {
     rainRipples.push({
       x: Math.random() * width,
@@ -503,13 +509,17 @@ export function renderRain({ ctx, width, height, audioBands, layer }: RenderCont
   }
 
   ctx.save();
+  let dt = time - globalLastRainTime;
+  if (dt < 0 || dt > 0.1) dt = 1/60;
+  globalLastRainTime = time;
+
   ctx.strokeStyle = layer.colorPrimary || '#38bdf8';
   ctx.lineWidth = 2;
 
   for (let i = rainRipples.length - 1; i >= 0; i--) {
     const rip = rainRipples[i];
-    rip.r += 2 * layer.sensitivity;
-    rip.alpha -= 0.02;
+    rip.r += 2 * layer.sensitivity * dt * 60;
+    rip.alpha -= 0.02 * dt * 60;
 
     if (rip.alpha <= 0) {
       rainRipples.splice(i, 1);

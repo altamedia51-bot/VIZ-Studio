@@ -14,7 +14,7 @@ interface ExportModalProps {
   onClose: () => void;
   canvas: HTMLCanvasElement | null;
   duration: number;
-  renderFrameAtTime: (timeSec: number) => void;
+  renderFrameAtTime: (timeSec: number) => Promise<void> | void;
 }
 
 const encoderEngine = new EncoderEngine();

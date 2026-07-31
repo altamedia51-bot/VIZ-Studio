@@ -16,6 +16,7 @@ interface PreviewCanvasProps {
   currentTime: number;
   duration: number;
   audioBands: AudioBands;
+  isExporting?: boolean;
   onTogglePlay: () => void;
   onSeek: (timeSec: number) => void;
   onUpdateLayer?: (id: string, updates: Partial<any>) => void;
@@ -23,6 +24,7 @@ interface PreviewCanvasProps {
 
 export interface PreviewCanvasRef {
   renderFrameSync: (timeSec: number) => void;
+  renderFrameAsync: (timeSec: number) => Promise<void>;
 }
 
 const bgRenderer = new BackgroundRenderer();
@@ -34,6 +36,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasRef, PreviewCanvasProps>(({
   currentTime,
   duration,
   audioBands,
+  isExporting = false,
   onTogglePlay,
   onSeek,
   onUpdateLayer,
@@ -83,7 +86,7 @@ export const PreviewCanvas = forwardRef<PreviewCanvasRef, PreviewCanvasProps>(({
 
       // 1. Background Layer
       if (layer.type === 'background') {
-        bgRenderer.render(ctx, renderWidth, renderHeight, layer as BackgroundLayer, time, currentAudioBands);
+        bgRenderer.render(ctx, renderWidth, renderHeight, layer as BackgroundLayer, time, currentAudioBands, isOfflineRender, isPlaying);
       }
 
       // 2. Visualizer Layer
@@ -173,20 +176,31 @@ export const PreviewCanvas = forwardRef<PreviewCanvasRef, PreviewCanvasProps>(({
   useImperativeHandle(ref, () => ({
     renderFrameSync: (timeSec: number) => {
       renderFrame(timeSec);
+    },
+    renderFrameAsync: async (timeSec: number) => {
+      const sortedLayers = [...project.layers].sort((a, b) => a.zIndex - b.zIndex);
+      for (const layer of sortedLayers) {
+        if (layer.type === 'background') {
+          await bgRenderer.prepareOfflineRender(layer as any, timeSec);
+        }
+      }
+      renderFrame(timeSec);
     }
   }));
 
   // RequestAnimationFrame Render Loop
   useEffect(() => {
     const loop = () => {
-      renderFrame();
+      if (!isExporting) {
+        renderFrame();
+      }
       animRef.current = requestAnimationFrame(loop);
     };
     animRef.current = requestAnimationFrame(loop);
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [renderFrame]);
+  }, [renderFrame, isExporting]);
 
   // Format Timecode string
   const formatTimecode = (sec: number) => {

@@ -18,26 +18,32 @@ export function useAudio() {
 
   const animFrameRef = useRef<number | null>(null);
 
-  // Sync state loop when playing
+  // Sync state loop continuously
   useEffect(() => {
     const loop = () => {
-      if (globalAudioEngine.getIsPlaying()) {
+      // Selalu jalankan loop, periksa status dari engine
+      const enginePlaying = globalAudioEngine.getIsPlaying();
+      
+      // Update isPlaying state if mismatched
+      setIsPlaying((prev) => {
+        if (prev !== enginePlaying) return enginePlaying;
+        return prev;
+      });
+
+      if (enginePlaying) {
         setCurrentTime(globalAudioEngine.getCurrentTime());
         setAudioBands(globalAudioEngine.getAudioBands());
-        animFrameRef.current = requestAnimationFrame(loop);
       }
+      
+      animFrameRef.current = requestAnimationFrame(loop);
     };
 
-    if (isPlaying) {
-      animFrameRef.current = requestAnimationFrame(loop);
-    } else {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    }
+    animFrameRef.current = requestAnimationFrame(loop);
 
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying]);
+  }, []);
 
   // Load Audio File
   const loadAudioFile = useCallback(async (file: File) => {

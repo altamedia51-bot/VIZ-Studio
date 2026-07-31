@@ -102,11 +102,19 @@ export class AudioEngine {
   }
 
   public play(offsetSeconds: number = this.pauseOffset, loop: boolean = false): void {
-    if (!this.buffer) return;
     const ctx = this.initContext();
-
+    if (!ctx) return;
+    
     if (this.isPlaying) {
       this.stop();
+    }
+
+    if (!this.buffer) {
+      // Playback without audio buffer (just tracking time)
+      this.startTime = ctx.currentTime - offsetSeconds;
+      this.pauseOffset = offsetSeconds;
+      this.isPlaying = true;
+      return;
     }
 
     this.sourceNode = ctx.createBufferSource();
@@ -162,11 +170,12 @@ export class AudioEngine {
       return this.pauseOffset;
     }
     const elapsed = this.ctx.currentTime - this.startTime;
-    return Math.min(elapsed, this.getDuration());
+    const dur = this.getDuration();
+    return dur > 0 ? Math.min(elapsed, dur) : elapsed;
   }
 
   public getDuration(): number {
-    return this.buffer ? this.buffer.duration : 0;
+    return this.buffer ? this.buffer.duration : Infinity;
   }
 
   public getIsPlaying(): boolean {

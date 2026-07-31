@@ -28,13 +28,64 @@ export class BackgroundRenderer {
     }
   }
 
+  public async prepareOfflineRender(layer: BackgroundLayer, time: number) {
+    if (layer.type !== 'video') return;
+    if (layer.videoUrl || layer.videoElement) {
+      let vEl = layer.videoElement;
+      if (!vEl && layer.videoUrl) {
+        if (!this.videoCache.has(layer.videoUrl)) {
+          const video = document.createElement('video');
+          video.src = layer.videoUrl;
+          video.loop = true;
+          video.muted = true;
+          video.playsInline = true;
+          video.play().catch(() => {});
+          this.videoCache.set(layer.videoUrl, video);
+        }
+        vEl = this.videoCache.get(layer.videoUrl);
+      }
+      if (vEl && vEl.readyState >= 1) {
+        if (!vEl.paused) vEl.pause();
+        const vidDuration = Number.isFinite(vEl.duration) && vEl.duration > 0 ? vEl.duration : 10;
+        const targetTime = time % vidDuration;
+        
+        if (Math.abs(vEl.currentTime - targetTime) > 0.005) {
+          await new Promise<void>((resolve) => {
+            let resolved = false;
+            const finish = () => {
+              if (resolved) return;
+              resolved = true;
+              clearTimeout(timeoutId);
+              vEl!.removeEventListener('seeked', onSeeked);
+              resolve();
+            };
+            const timeoutId = setTimeout(finish, 800);
+
+            const onSeeked = () => {
+              if ('requestVideoFrameCallback' in vEl!) {
+                (vEl as any).requestVideoFrameCallback(() => finish());
+              } else {
+                setTimeout(finish, 20); // Fallback for browsers without requestVideoFrameCallback
+              }
+            };
+
+            vEl!.addEventListener('seeked', onSeeked);
+            vEl!.currentTime = targetTime;
+          });
+        }
+      }
+    }
+  }
+
   public render(
     ctx: CanvasRenderingContext2D,
     width: number,
     height: number,
     layer: BackgroundLayer,
     time: number,
-    audioBands?: AudioBands
+    audioBands?: AudioBands,
+    isOfflineRender?: boolean,
+    isPlaying?: boolean
   ) {
     if (!layer.visible) return;
 
@@ -112,6 +163,33 @@ export class BackgroundRenderer {
             vEl = this.videoCache.get(layer.videoUrl);
           }
           if (vEl && vEl.readyState >= 2) {
+            const vidDuration = Number.isFinite(vEl.duration) && vEl.duration > 0 ? vEl.duration : 10;
+            const targetTime = time % vidDuration;
+            if (!isOfflineRender) {
+              // Jika audio sedang play (atau status default undefined)
+              if (isPlaying !== false) {
+                if (vEl.paused) vEl.play().catch(() => {});
+                
+                let diff = vEl.currentTime - targetTime;
+                if (diff > vidDuration / 2) diff -= vidDuration;
+                if (diff < -vidDuration / 2) diff += vidDuration;
+                
+                if (Math.abs(diff) > 1.0) {
+                  vEl.currentTime = targetTime;
+                }
+              } else {
+                // Jika audio paused
+                if (!vEl.paused) vEl.pause();
+                
+                let diff = vEl.currentTime - targetTime;
+                if (diff > vidDuration / 2) diff -= vidDuration;
+                if (diff < -vidDuration / 2) diff += vidDuration;
+                
+                if (Math.abs(diff) > 0.1) {
+                  vEl.currentTime = targetTime;
+                }
+              }
+            }
             ctx.drawImage(vEl, 0, 0, width, height);
           } else {
             ctx.fillStyle = '#000000';
@@ -124,13 +202,18 @@ export class BackgroundRenderer {
         break;
 
       case 'particle': {
+        const safeDt = (this as any).lastParticleTime === undefined 
+          ? 1/60 
+          : Math.min(Math.max(time - (this as any).lastParticleTime, 0), 0.1);
+        (this as any).lastParticleTime = time;
+
         ctx.fillStyle = '#090d16';
         ctx.fillRect(0, 0, width, height);
 
         ctx.fillStyle = layer.tintColor || '#38bdf8';
         for (const p of this.particleArray) {
-          p.x = (p.x + p.vx + width) % width;
-          p.y = (p.y + p.vy + height) % height;
+          p.x = (p.x + p.vx * safeDt * 60 + width) % width;
+          p.y = (p.y + p.vy * safeDt * 60 + height) % height;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.r + (audioBands?.bass || 0) * 3, 0, Math.PI * 2);
           ctx.fill();
