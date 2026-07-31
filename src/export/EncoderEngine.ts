@@ -78,9 +78,30 @@ export class EncoderEngine {
     onProgress: (p: ExportProgress) => void,
     addLog: (m: string) => void,
     logs: string[],
-    audioBuffer?: AudioBuffer | null
+    originalAudioBuffer?: AudioBuffer | null
   ): Promise<Blob> {
     const isMp4 = settings.format === 'mp4';
+    let audioBuffer = originalAudioBuffer;
+    
+    // Opus strictly requires 48000Hz in WebCodecs
+    if (!isMp4 && audioBuffer && audioBuffer.sampleRate !== 48000) {
+      addLog('Resampling audio to 48000Hz for Opus...');
+      try {
+        const offlineCtx = new OfflineAudioContext(
+          audioBuffer.numberOfChannels, 
+          audioBuffer.duration * 48000, 
+          48000
+        );
+        const source = offlineCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(offlineCtx.destination);
+        source.start();
+        audioBuffer = await offlineCtx.startRendering();
+      } catch (e) {
+        addLog(`Audio resample error: ${e}`);
+      }
+    }
+
     let muxer: any;
 
     const width = settings.width % 2 !== 0 ? settings.width - 1 : settings.width;
@@ -159,7 +180,6 @@ export class EncoderEngine {
 
     if (audioBuffer && (window as any).AudioEncoder) {
       const aCodec = isMp4 ? 'mp4a.40.2' : 'opus';
-      
       const sampleRate = audioBuffer.sampleRate;
       
       const aConfig = {

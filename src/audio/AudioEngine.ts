@@ -315,9 +315,23 @@ export class AudioEngine {
     return { bpm, beatTimes };
   }
 
+  private offlineSmoothedBass: number = 0;
+  private offlineSmoothedMid: number = 0;
+  private offlineSmoothedTreble: number = 0;
+  private offlinePeak: number = 0;
+
   public getOfflineAudioBands(timeSec: number): AudioBands {
     if (!this.buffer) return { bass: 0, mid: 0, treble: 0, peak: 0, amplitude: 0 };
     
+    // If time resets or goes backward, reset smoothing
+    if (timeSec === 0 || timeSec < (this as any).lastOfflineTimeSec) {
+      this.offlineSmoothedBass = 0;
+      this.offlineSmoothedMid = 0;
+      this.offlineSmoothedTreble = 0;
+      this.offlinePeak = 0;
+    }
+    (this as any).lastOfflineTimeSec = timeSec;
+
     const sampleRate = this.buffer.sampleRate;
     const channelData = this.buffer.getChannelData(0);
     const startSample = Math.floor(timeSec * sampleRate);
@@ -327,7 +341,7 @@ export class AudioEngine {
     }
     
     // Read a small window (e.g. 1024 samples)
-    const windowSize = 1024;
+    const windowSize = 2048;
     let sum = 0;
     let peak = 0;
     const maxIdx = Math.min(startSample + windowSize, channelData.length);
@@ -338,14 +352,21 @@ export class AudioEngine {
     }
     
     const amplitude = sum / windowSize;
-    // We can't do a real FFT synchronously fast here without complex math, 
-    // so we approximate based on amplitude and simple zero-crossing or just mapping amplitude to bands.
-    // This provides SOME visualizer animation during fast offline export!
+    
+    const rawBass = amplitude * 1.5;
+    const rawMid = amplitude * 1.2;
+    const rawTreble = amplitude * 0.8;
+
+    this.offlineSmoothedBass = this.offlineSmoothedBass * 0.6 + rawBass * 0.4;
+    this.offlineSmoothedMid = this.offlineSmoothedMid * 0.6 + rawMid * 0.4;
+    this.offlineSmoothedTreble = this.offlineSmoothedTreble * 0.6 + rawTreble * 0.4;
+    this.offlinePeak = Math.max(peak, this.offlinePeak * 0.85);
+
     return {
-      bass: amplitude * 1.5,
-      mid: amplitude * 1.2,
-      treble: amplitude * 0.8,
-      peak: peak,
+      bass: this.offlineSmoothedBass,
+      mid: this.offlineSmoothedMid,
+      treble: this.offlineSmoothedTreble,
+      peak: this.offlinePeak,
       amplitude: amplitude,
     };
   }
@@ -362,16 +383,16 @@ export class AudioEngine {
     const maxIdx = Math.min(startSample + windowSize, channelData.length);
     let peak = 0;
     for (let i = startSample; i < maxIdx; i++) {
-      if (Math.abs(channelData[i]) > peak) peak = Math.abs(channelData[i]);
+      const val = Math.abs(channelData[i]);
+      if (val > peak) peak = val;
     }
     
-    // Simulate frequency bins (fake spectrum curve)
+    // Simulate frequency bins smoothly to avoid rapid flickering
     for (let i = 0; i < size; i++) {
-      // Create a curve that peaks at low frequencies and falls off, modulated by time
       const curve = Math.max(0, 1 - (i / size));
-      const noise = Math.random() * 0.2;
-      const wave = Math.sin(timeSec * 10 + i * 0.1);
-      data[i] = Math.min(255, (peak * 255 * curve) * (0.8 + noise + wave * 0.2));
+      // Slower, smooth wave for visual dynamics, no random noise
+      const wave = Math.sin(timeSec * 4 + i * 0.05);
+      data[i] = Math.min(255, (peak * 255 * curve) * (0.8 + wave * 0.2));
     }
     return data;
   }

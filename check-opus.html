@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><body>
+<script>
+async function check() {
+  try {
+    const a1 = await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 44100, numberOfChannels: 2, bitrate: 128000 });
+    const a2 = await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 });
+    document.body.innerHTML = `OPUS 44100: ${a1.supported}, OPUS 48000: ${a2.supported}`;
+  } catch (e) {
+    document.body.innerHTML = `Error: ${e.message}`;
+  }
+}
+check();
+</script>
+</body></html>
