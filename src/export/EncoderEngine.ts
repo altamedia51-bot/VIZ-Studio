@@ -188,6 +188,15 @@ export class EncoderEngine {
       }
     }
 
+    const channelData: Float32Array[] = [];
+    if (audioEncoder && audioBuffer) {
+      for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
+        channelData.push(audioBuffer.getChannelData(i));
+      }
+    }
+    const sampleRate = audioBuffer ? audioBuffer.sampleRate : 44100;
+    const numChannels = audioBuffer ? audioBuffer.numberOfChannels : 2;
+
     addLog(`Mulai rendering video dengan codec ${videoCodec}...`);
     const startTime = Date.now();
 
@@ -208,6 +217,11 @@ export class EncoderEngine {
 
       while (videoEncoder.state !== 'closed' && videoEncoder.encodeQueueSize > 8) {
         await new Promise((r) => setTimeout(r, 10));
+      }
+      if (audioEncoder) {
+        while (audioEncoder.state !== 'closed' && audioEncoder.encodeQueueSize > 10) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
       }
 
       if (encoderError || videoEncoder.state === 'closed') {
@@ -233,6 +247,37 @@ export class EncoderEngine {
       videoFrame.close();
       bitmap.close();
 
+      // Encode Interleaved Audio
+      if (audioEncoder && audioBuffer) {
+        const offset = Math.floor(currentTime * sampleRate);
+        const nextOffset = Math.floor((frameIndex + 1) * frameIntervalSec * sampleRate);
+        const size = nextOffset - offset;
+        if (size > 0) {
+          const planarData = new Float32Array(size * numChannels);
+          for (let c = 0; c < numChannels; c++) {
+            const channelDestOffset = c * size;
+            if (offset < audioBuffer.length) {
+              const copySize = Math.min(size, audioBuffer.length - offset);
+              planarData.set(channelData[c].subarray(offset, offset + copySize), channelDestOffset);
+            }
+          }
+
+          const audioData = new (window as any).AudioData({
+            format: 'f32-planar',
+            sampleRate: sampleRate,
+            numberOfFrames: size,
+            numberOfChannels: numChannels,
+            timestamp: Math.round((offset / sampleRate) * 1000000), // microsec
+            data: planarData,
+          });
+
+          if (audioEncoder.state !== 'closed') {
+            audioEncoder.encode(audioData);
+          }
+          audioData.close();
+        }
+      }
+
       const elapsedSeconds = (Date.now() - startTime) / 1000;
       const progressPercent = Math.min(99, Math.round(((frameIndex + 1) / totalFrames) * 100));
       const estimatedSecondsLeft = Math.max(0, Math.round((elapsedSeconds / (frameIndex + 1)) * (totalFrames - frameIndex - 1)));
@@ -257,55 +302,6 @@ export class EncoderEngine {
     videoEncoder.close();
 
     if (audioEncoder && audioBuffer) {
-      addLog(`Menyusun trek audio...`);
-      const sampleRate = audioBuffer.sampleRate;
-      const numChannels = audioBuffer.numberOfChannels;
-      
-      // Calculate how many samples are needed for the exported duration
-      const totalSamplesToEncode = Math.ceil(durationSec * sampleRate);
-
-      // Copy channel data
-      const channelData: Float32Array[] = [];
-      for (let i = 0; i < numChannels; i++) {
-        channelData.push(audioBuffer.getChannelData(i));
-      }
-
-      // Encode audio in chunks of 0.5s
-      const chunkSize = Math.floor(sampleRate * 0.5); 
-      for (let offset = 0; offset < totalSamplesToEncode; offset += chunkSize) {
-        if (this.isCancelled) throw new Error('Export cancelled');
-        
-        while (audioEncoder.encodeQueueSize > 10) {
-          await new Promise((r) => setTimeout(r, 10));
-        }
-
-        const size = Math.min(chunkSize, totalSamplesToEncode - offset);
-        const planarData = new Float32Array(size * numChannels);
-        
-        for (let c = 0; c < numChannels; c++) {
-          const channelDestOffset = c * size;
-          // If we read past the audio buffer length, pad with 0s (silence)
-          if (offset >= audioBuffer.length) {
-            // Already 0s due to Float32Array init
-          } else {
-            const copySize = Math.min(size, audioBuffer.length - offset);
-            planarData.set(channelData[c].subarray(offset, offset + copySize), channelDestOffset);
-          }
-        }
-
-        const audioData = new (window as any).AudioData({
-          format: 'f32-planar',
-          sampleRate: sampleRate,
-          numberOfFrames: size,
-          numberOfChannels: numChannels,
-          timestamp: Math.round((offset / sampleRate) * 1000000), // microsec
-          data: planarData,
-        });
-
-        audioEncoder.encode(audioData);
-        audioData.close();
-      }
-
       await audioEncoder.flush();
       audioEncoder.close();
     }

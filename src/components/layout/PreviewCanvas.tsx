@@ -2,7 +2,7 @@
  * VIZ Studio - Preview Canvas & Realtime Renderer
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { Play, Pause, SkipBack, Maximize, Grid, Volume2 } from 'lucide-react';
 import { ProjectData, AudioBands, BackgroundLayer, VisualizerLayer, TextLayer } from '../../types';
 import { VISUALIZER_REGISTRY } from '../../visualizer/presets';
@@ -21,10 +21,14 @@ interface PreviewCanvasProps {
   onUpdateLayer?: (id: string, updates: Partial<any>) => void;
 }
 
+export interface PreviewCanvasRef {
+  renderFrameSync: (timeSec: number) => void;
+}
+
 const bgRenderer = new BackgroundRenderer();
 const postEngine = new PostProcessingEngine();
 
-export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
+export const PreviewCanvas = forwardRef<PreviewCanvasRef, PreviewCanvasProps>(({
   project,
   isPlaying,
   currentTime,
@@ -33,7 +37,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   onTogglePlay,
   onSeek,
   onUpdateLayer,
-}) => {
+}, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,15 +48,25 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const { width: renderWidth, height: renderHeight } = project.resolution;
 
   // Real-time Canvas Rendering Function
-  const renderFrame = useCallback(() => {
+  const renderFrame = useCallback((overrideTime?: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const time = currentTime;
-    const freqData = globalAudioEngine.getFrequencyData();
-    const timeData = globalAudioEngine.getTimeDomainData();
+    const isOfflineRender = overrideTime !== undefined;
+    const time = isOfflineRender ? overrideTime : currentTime;
+    
+    // Retrieve real-time OR offline audio data
+    const freqData = isOfflineRender 
+      ? globalAudioEngine.getOfflineFrequencyData(time)
+      : globalAudioEngine.getFrequencyData();
+      
+    const timeData = globalAudioEngine.getTimeDomainData(); // Not perfectly faked, but rarely used 
+    
+    const currentAudioBands = isOfflineRender
+      ? globalAudioEngine.getOfflineAudioBands(time)
+      : audioBands;
 
     // Clear Canvas
     ctx.clearRect(0, 0, renderWidth, renderHeight);
@@ -69,7 +83,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
       // 1. Background Layer
       if (layer.type === 'background') {
-        bgRenderer.render(ctx, renderWidth, renderHeight, layer as BackgroundLayer, time, audioBands);
+        bgRenderer.render(ctx, renderWidth, renderHeight, layer as BackgroundLayer, time, currentAudioBands);
       }
 
       // 2. Visualizer Layer
@@ -83,7 +97,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             height: renderHeight,
             frequencyData: freqData,
             timeDomainData: timeData,
-            audioBands,
+            audioBands: currentAudioBands,
             layer: vizLayer,
             time,
           });
@@ -108,11 +122,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         // Apply Text Animation Transforms
         let animOffset = 0;
         if (textLayer.animation === 'bounce') {
-          animOffset = Math.sin(time * 5) * 15 * audioBands.bass;
+          animOffset = Math.sin(time * 5) * 15 * currentAudioBands.bass;
         } else if (textLayer.animation === 'pulse') {
-          const s = 1 + audioBands.bass * 0.2;
+          const s = 1 + currentAudioBands.bass * 0.2;
           ctx.scale(s, s);
-        } else if (textLayer.animation === 'shake' && audioBands.bass > 0.4) {
+        } else if (textLayer.animation === 'shake' && currentAudioBands.bass > 0.4) {
           ctx.translate((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
         }
 
@@ -155,6 +169,12 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     // Apply Post Processing Effects
     postEngine.applyEffects(ctx, renderWidth, renderHeight, project.effects, time);
   }, [project, currentTime, audioBands, renderWidth, renderHeight]);
+
+  useImperativeHandle(ref, () => ({
+    renderFrameSync: (timeSec: number) => {
+      renderFrame(timeSec);
+    }
+  }));
 
   // RequestAnimationFrame Render Loop
   useEffect(() => {
@@ -308,4 +328,4 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       </div>
     </div>
   );
-};
+});

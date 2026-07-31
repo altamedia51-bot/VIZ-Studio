@@ -8,7 +8,7 @@ import { useAudio } from './hooks/useAudio';
 import { useKeyboardShortcuts } from './utils/keyboardShortcuts';
 import { HeaderToolbar } from './components/layout/HeaderToolbar';
 import { Sidebar } from './components/layout/Sidebar';
-import { PreviewCanvas } from './components/layout/PreviewCanvas';
+import { PreviewCanvas, PreviewCanvasRef } from './components/layout/PreviewCanvas';
 import { Inspector } from './components/layout/Inspector';
 import { Timeline } from './components/layout/Timeline';
 import { StatusBar } from './components/layout/StatusBar';
@@ -19,6 +19,8 @@ import { VisualizerLayer, TextLayer, VisualizerPresetType, FFTSize } from './typ
 import { dbStorage } from './storage/IndexedDBStorage';
 
 export default function App() {
+  const previewCanvasRef = useRef<PreviewCanvasRef>(null);
+
   const {
     project,
     updateProject,
@@ -308,6 +310,7 @@ export default function App() {
 
         {/* Center Preview Canvas Player */}
         <PreviewCanvas
+          ref={previewCanvasRef}
           project={project}
           isPlaying={isPlaying}
           currentTime={currentTime}
@@ -342,7 +345,7 @@ export default function App() {
         onClose={() => setIsExportOpen(false)}
         canvas={document.querySelector('canvas')}
         duration={duration || project.duration}
-        renderFrameAtTime={seek}
+        renderFrameAtTime={(t) => previewCanvasRef.current?.renderFrameSync(t)}
       />
 
       <ProjectModal

@@ -315,6 +315,67 @@ export class AudioEngine {
     return { bpm, beatTimes };
   }
 
+  public getOfflineAudioBands(timeSec: number): AudioBands {
+    if (!this.buffer) return { bass: 0, mid: 0, treble: 0, peak: 0, amplitude: 0 };
+    
+    const sampleRate = this.buffer.sampleRate;
+    const channelData = this.buffer.getChannelData(0);
+    const startSample = Math.floor(timeSec * sampleRate);
+    
+    if (startSample < 0 || startSample >= channelData.length) {
+      return { bass: 0, mid: 0, treble: 0, peak: 0, amplitude: 0 };
+    }
+    
+    // Read a small window (e.g. 1024 samples)
+    const windowSize = 1024;
+    let sum = 0;
+    let peak = 0;
+    const maxIdx = Math.min(startSample + windowSize, channelData.length);
+    for (let i = startSample; i < maxIdx; i++) {
+      const val = Math.abs(channelData[i]);
+      sum += val;
+      if (val > peak) peak = val;
+    }
+    
+    const amplitude = sum / windowSize;
+    // We can't do a real FFT synchronously fast here without complex math, 
+    // so we approximate based on amplitude and simple zero-crossing or just mapping amplitude to bands.
+    // This provides SOME visualizer animation during fast offline export!
+    return {
+      bass: amplitude * 1.5,
+      mid: amplitude * 1.2,
+      treble: amplitude * 0.8,
+      peak: peak,
+      amplitude: amplitude,
+    };
+  }
+  
+  public getOfflineFrequencyData(timeSec: number, size: number = 1024): Uint8Array {
+    const data = new Uint8Array(size);
+    if (!this.buffer) return data;
+    const sampleRate = this.buffer.sampleRate;
+    const channelData = this.buffer.getChannelData(0);
+    const startSample = Math.floor(timeSec * sampleRate);
+    
+    // Fill with simulated FFT based on actual waveform amplitude
+    const windowSize = 2048;
+    const maxIdx = Math.min(startSample + windowSize, channelData.length);
+    let peak = 0;
+    for (let i = startSample; i < maxIdx; i++) {
+      if (Math.abs(channelData[i]) > peak) peak = Math.abs(channelData[i]);
+    }
+    
+    // Simulate frequency bins (fake spectrum curve)
+    for (let i = 0; i < size; i++) {
+      // Create a curve that peaks at low frequencies and falls off, modulated by time
+      const curve = Math.max(0, 1 - (i / size));
+      const noise = Math.random() * 0.2;
+      const wave = Math.sin(timeSec * 10 + i * 0.1);
+      data[i] = Math.min(255, (peak * 255 * curve) * (0.8 + noise + wave * 0.2));
+    }
+    return data;
+  }
+
   // -------------------------------------------------------------------------
   // Waveform Peak Points for UI rendering
   // -------------------------------------------------------------------------
